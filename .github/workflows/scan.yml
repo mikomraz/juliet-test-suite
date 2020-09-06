@@ -1,0 +1,128 @@
+name: Security Scan
+
+on:
+  push:
+    branches:
+      - develop
+      - master
+  pull_request:
+    branches:
+      - develop
+      - master
+
+jobs:
+  my-scan:
+    name: "My Scan Action"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+        with:
+          version: '290.0.1'
+          service_account_key: ${{ secrets.GCE_SA_KEY }}
+          project_id: ${{ secrets.GCE_PROJECT }}
+
+      - run: |-
+          gcloud --quiet auth configure-docker
+          docker run --publish 18200:8200 --detach gcr.io/$GCE_PROJECT/sast-engine:dev 
+          sleep 5
+        env:
+          GCE_PROJECT: ${{ secrets.GCE_PROJECT }}
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+      - run: git checkout HEAD^2
+        if: ${{ github.event_name == 'pull_request' }}
+
+      - name: Perform SAST Scan
+        run: 'echo "{\"sourcesArchiveBase64\":\"$(zip -q -r - . | base64)\"}" | curl -X POST -H "Content-Type: application/json" -d @- http://localhost:18200/api/analyse -o results.sarif && test -f results.sarif'
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v1
+        with:
+          sarif_file: results.sarif
+
+
+  ShiftLeft-Scan-Action:
+    name: "ShiftLeft Scan Action"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+      - run: git checkout HEAD^2
+        if: ${{ github.event_name == 'pull_request' }}
+
+      - name: Perform ShiftLeft Scan
+        uses: ShiftLeftSecurity/scan-action@master
+        env:
+          WORKSPACE: "" # WORKSPACE: https://github.com/${{ github.repository }}/blob/${{ github.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCAN_AUTO_BUILD: true
+        with:
+          type: "java"
+          output: reports
+
+      - name: Upload sarif report
+        uses: github/codeql-action/upload-sarif@v1
+        with:
+          sarif_file: reports
+
+  Sonar-Sast-Scan-Action:
+    name: "SonarCloud.io Scanning"
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ${{secrets.DEPLOY_PASSWORD}} | sudo -S chown -R $USER:$USER /home/runner/work/juliet-test-suite
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+      - run: git checkout HEAD^2
+        if: ${{ github.event_name == 'pull_request' }}
+      - uses: actions/setup-java@v1.3.0
+        with:
+          java-version: '11'
+      - run: mvn clean package -DskipTests
+
+      - name: Analyze with SonarCloud
+        run: mvn sonar:sonar -Dsonar.projectKey=ghaction-juliet-test-suite -Dsonar.organization=mikomraz -Dsonar.host.url=https://sonarcloud.io -Dsonar.login=$SONAR_TOKEN -Dsonar.scm.disabled=true -Dsonar.cpd.exclusions=** -Dsonar.branch.autoconfig.disabled=true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  
+  CodeQL-Scan:
+    name: "CodeQL Scan"
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo ${{secrets.DEPLOY_PASSWORD}} | sudo -S chown -R $USER:$USER /home/runner/work/juliet-test-suite
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2
+
+      - run: git checkout HEAD^2
+        if: ${{ github.event_name == 'pull_request' }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v1
+        with:
+          languages: java
+
+#       - name: Autobuild
+#         uses: github/codeql-action/autobuild@v1
+
+      - run: |
+          echo ${{secrets.DEPLOY_PASSWORD}} | sudo -S chown -R $USER:$USER /home/runner/work/juliet-test-suite
+      - uses: actions/checkout@v1
+      - name: Setup Java JDK
+        uses: actions/setup-java@v1.3.0
+        with:
+          java-version: '11'
+      - name: Build
+        run: |
+          mvn clean install -DskipTests
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v1
