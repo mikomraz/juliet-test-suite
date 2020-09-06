@@ -123,6 +123,6 @@ jobs:
           java-version: '11'
       - name: Build
         run: |
-          mvn clean install -DskipTests
+          mvn compile
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v1
